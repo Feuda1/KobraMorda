@@ -1,0 +1,31 @@
+{
+  "name": "kobramorda-backend",
+  "version": "0.1.0",
+  "description": "Independent Moonraker-compatible bridge for the Anycubic Kobra X",
+  "type": "module",
+  "private": true,
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "fetch-credentials": "tsx src/tools/fetchCredentialsCli.ts",
+    "probe-mqtt": "tsx src/tools/probeMqttCli.ts"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "express": "^4.19.2",
+    "mqtt": "^5.10.1",
+    "multer": "^2.4.0",
+    "undici": "^8.10.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.7.4",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# build output (built locally by the launcher / npm run build)
+backend/dist/
+frontend/dist/
+*.tsbuildinfo
+
+# runtime data - per-install, and some of it is secret (Telegram bot token,
+# printer IPs) - never committed
+backend/data/
+
+# logs
+*.log
+npm-debug.log*
+
+# editor/tooling
+.vscode/
+.claude/
+
+# the original reference project kept locally for protocol research -
+# not part of this clean-room codebase
+KX-Bridge-Release-nightly/
+
+# OS cruft
+Thumbs.db
+.DS_Store

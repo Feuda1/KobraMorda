@@ -1,0 +1,125 @@
+import { Router } from "express";
+import type { PrinterRegistry } from "./printerRegistry.js";
+import type { PrinterInstance } from "./printerInstance.js";
+import { scanNetwork } from "./discovery.js";
+import { detectLanIp } from "./net.js";
+import type { TelegramBot } from "./telegram.js";
+import type { SpoolmanClient } from "./spoolman.js";
+
+const MAIN_PORT = Number(process.env.PORT ?? 7130);
+
+function summary(inst: PrinterInstance, isPrimary: boolean) {
+  const s = inst.state;
+  return {
+    id: inst.config.id,
+    name: inst.config.name,
+    ip: inst.config.ip,
+    status: inst.status,
+    error: inst.status === "online" ? "" : inst.lastError,
+    printState: s.printState,
+    deviceState: s.deviceState,
+    filename: s.filename,
+    progress: s.progress,
+    currentLayer: s.currentLayer,
+    totalLayers: s.totalLayers,
+    remainTimeSec: s.remainTimeSec,
+    nozzleTemp: s.nozzleTemp,
+    bedTemp: s.bedTemp,
+    // where OrcaSlicer's "host" for this printer points
+    orcaHost: `${detectLanIp()}:${isPrimary ? MAIN_PORT : (inst.config.port ?? MAIN_PORT)}`,
+  };
+}
+
+/** Printer management (list / add / rename / remove / network scan) - independent of any single printer. */
+export function createPrintersApi(registry: PrinterRegistry, telegram: TelegramBot, spoolman: SpoolmanClient): Router {
+  const router = Router();
+
+  router.get("/api/printers", (_req, res) => {
+    const primary = registry.primary();
+    res.json({ items: registry.list().map((i) => summary(i, i === primary)) });
+  });
+
+  router.post("/api/printers", async (req, res) => {
+    try {
+      const inst = await registry.add(String(req.body?.ip ?? ""), req.body?.name);
+      res.status(201).json(summary(inst, inst === registry.primary()));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post("/api/printers/scan", async (_req, res) => {
+    const found = await scanNetwork();
+    res.json({ items: found.map((f) => ({ ip: f.ip, added: !!registry.findByIp(f.ip) })) });
+  });
+
+  router.patch("/api/printers/:id", (req, res) => {
+    try {
+      registry.rename(req.params.id, String(req.body?.name ?? ""));
+      res.json({ result: "ok" });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete("/api/printers/:id", async (req, res) => {
+    try {
+      await registry.remove(req.params.id);
+      res.json({ result: "ok" });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/api/telegram", (_req, res) => {
+    res.json(telegram.publicSettings());
+  });
+
+  router.post("/api/telegram", (req, res) => {
+    const b = req.body ?? {};
+    telegram.update({
+      token: typeof b.token === "string" ? b.token : undefined,
+      proxy: typeof b.proxy === "string" ? b.proxy : undefined,
+      notify: typeof b.notify === "object" && b.notify ? b.notify : undefined,
+    });
+    res.json(telegram.publicSettings());
+  });
+
+  router.post("/api/telegram/pairing/reset", (_req, res) => {
+    telegram.resetPairing();
+    res.json(telegram.publicSettings());
+  });
+
+  router.post("/api/telegram/test", async (_req, res) => {
+    try {
+      await telegram.sendTest();
+      res.json({ result: "ok" });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete("/api/telegram/chats/:id", (req, res) => {
+    telegram.removeChat(Number(req.params.id));
+    res.json(telegram.publicSettings());
+  });
+
+  router.get("/api/spoolman", async (_req, res) => {
+    res.json({ url: spoolman.getUrl(), ok: spoolman.enabled ? await spoolman.check() : false });
+  });
+
+  router.post("/api/spoolman", async (req, res) => {
+    spoolman.setUrl(String(req.body?.url ?? ""));
+    res.json({ url: spoolman.getUrl(), ok: spoolman.enabled ? await spoolman.check() : false });
+  });
+
+  router.get("/api/spoolman/spools", async (_req, res) => {
+    try {
+      res.json({ items: await spoolman.spools() });
+    } catch (err) {
+      res.status(502).json({ error: (err as Error).message });
+    }
+  });
+
+  return router;
+}

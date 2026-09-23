@@ -1,0 +1,289 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #15151b;
+  --card: #1e1e27;
+  --border: #2c2c38;
+  --text: #f0f0f5;
+  --text-muted: #8c8ca3;
+  --accent: #3bb2f6;
+  --ok: #3ddc84;
+  --warn: #f5b544;
+  --err: #f5556c;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+/* Scrollable panels (settings list, dropdowns) get a themed scrollbar instead of the OS default. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ---- motion ---------------------------------------------------------------------- */
+
+/*
+ * NOTE on .enter: it deliberately animates `margin-top`, not `transform`.
+ * A CSS animation with fill-mode both/forwards keeps its *last keyframe's
+ * computed value* applied forever, and for `transform` that means an
+ * identity matrix, not the keyword "none" - which still counts as "a
+ * transform" and makes the element a containing block for any
+ * `position: fixed` descendant (e.g. a modal backdrop opened later from
+ * inside that card). That silently broke every modal nested in an
+ * `.enter`-wrapped card: instead of covering the viewport, the backdrop
+ * got clipped to the card's own box. `margin-top` has no such effect.
+ */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    margin-top: 10px;
+  }
+  to {
+    opacity: 1;
+    margin-top: 0;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  65% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+@keyframes shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes ping-soft {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes feed-in {
+  0% {
+    transform: translateY(-34px);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes ring-out {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 178, 246, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(59, 178, 246, 0);
+  }
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+@keyframes confetti-burst {
+  from {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  to {
+    transform: translate(var(--dx), var(--dy));
+    opacity: 0;
+  }
+}
+
+.enter {
+  animation: fade-up 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+.fade-in {
+  animation: fade-in 0.6s ease both;
+}
+.modal-in {
+  animation: modal-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.pop {
+  animation: pop 0.5s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.glow {
+  animation: glow 2.2s ease-in-out infinite;
+}
+.spin-slow {
+  animation: spin-slow 7s linear infinite;
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--border) 25%, rgba(255, 255, 255, 0.06) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* moving highlight across a filled progress bar */
+.bar-fill {
+  position: relative;
+  overflow: hidden;
+}
+.bar-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  animation: shine 2.2s ease-in-out infinite;
+}
+.bar-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  border-radius: 9999px;
+  animation: sweep 1.5s ease-in-out infinite;
+}
+
+button {
+  transition:
+    transform 0.14s ease,
+    filter 0.14s ease,
+    background-color 0.2s ease,
+    opacity 0.2s ease;
+}
+button:not(:disabled):hover {
+  filter: brightness(1.14);
+}
+button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+/* lift for clickable tiles */
+.lift {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
