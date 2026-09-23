@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -42,9 +41,14 @@ export class Updater {
     return run("git", args, { cwd: this.root, windowsHide: true });
   }
 
-  /** `npm` resolves to npm.cmd on Windows - execFile only finds it with a shell, unlike plain .exe tools like git. */
-  private npm(args: string[], cwd: string) {
-    return run("npm", args, { cwd, windowsHide: true, timeout: 10 * 60_000, shell: true });
+  /**
+   * `npm` resolves to npm.cmd on Windows - execFile only finds it with a
+   * shell, unlike a plain .exe like git. A single command string (not an
+   * args array) avoids Node's shell-quoting deprecation warning; safe here
+   * since every caller passes fixed, non-interpolated arguments.
+   */
+  private npm(command: string, cwd: string) {
+    return run(`npm ${command}`, { cwd, windowsHide: true, timeout: 10 * 60_000, shell: true });
   }
 
   async status(): Promise<UpdateStatus> {
@@ -98,9 +102,9 @@ export class Updater {
 
       for (const pkg of ["backend", "frontend"]) {
         onProgress(`Установка зависимостей (${pkg})`);
-        await this.npm(["install"], path.join(this.root, pkg));
+        await this.npm("install", path.join(this.root, pkg));
         onProgress(`Сборка (${pkg})`);
-        await this.npm(["run", "build"], path.join(this.root, pkg));
+        await this.npm("run build", path.join(this.root, pkg));
       }
     } catch (err) {
       throw new Error(err instanceof Error && err.message.startsWith("Об") ? err.message : describeGitError(err));
@@ -114,12 +118,26 @@ export class Updater {
    * one exit - the same restart this project has always done safely during
    * a live print (the printer keeps printing; only our own MQTT/monitoring
    * session drops for a few seconds and reconnects).
+   *
+   * The new process's output is redirected via a shell (`cmd /c "... >>
+   * log"`) rather than by opening the log file directly in this process and
+   * handing off the descriptor - verified live that `fs.openSync(logFile,
+   * "a")` here throws EBUSY, because *this* still-running process's own
+   * wrapping shell already holds the file open with a sharing mode Node's
+   * own open doesn't match. A fresh shell opening it independently for
+   * append works fine even while the old one is still writing to it.
    */
   restart(logFile: string): void {
-    const child = spawn(process.execPath, [path.join(this.root, "backend", "dist", "server.js"), ...process.argv.slice(2)], {
-      cwd: path.join(this.root, "backend"),
+    const backendDir = path.join(this.root, "backend");
+    const rel = path.relative(backendDir, logFile) || "data/bridge.log";
+    const extraArgs = process.argv
+      .slice(2)
+      .map((a) => `"${a.replace(/"/g, '""')}"`)
+      .join(" ");
+    const child = spawn("cmd.exe", ["/c", `node dist\\server.js ${extraArgs} >> "${rel}" 2>&1`], {
+      cwd: backendDir,
       detached: true,
-      stdio: ["ignore", fs.openSync(logFile, "a"), fs.openSync(logFile, "a")],
+      stdio: "ignore",
       windowsHide: true,
     });
     child.unref();
