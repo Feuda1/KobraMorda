@@ -129,18 +129,24 @@ export class Updater {
    *    (e.g. for `>>` shell redirection) reliably got killed the moment
    *    this process exited, even with `detached`/`unref()`/`stdio: "ignore"`
    *    all set correctly on the cmd.exe spawn itself.
-   * 2. The log file must be reopened via `fs.openSync` and handed to the
-   *    child's stdio directly (not shell redirection either): cmd.exe's own
-   *    `>>` opens the file with a sharing mode that a second, independent
-   *    open of the same path collides with (EBUSY) - which is exactly what
-   *    used to happen here, since the *old* process (this one) was itself
-   *    started via a `cmd /c "... >> log"` wrapper. Two Node-opened append
-   *    handles on the same file, from two different processes, don't
-   *    conflict the same way.
+   * 2. Opening the log file for the child (`fs.openSync(logFile, "a")`) can
+   *    throw EBUSY - if *this* process was itself started via a shell
+   *    (`cmd /c "... >> log"`, which every launch method here uses:
+   *    KobraMorda.exe, the .cmd/.vbs, and how I start it manually), that
+   *    shell already holds the file open with a sharing mode a second,
+   *    independent open of the same path collides with. That failure must
+   *    not be fatal - losing the new process's first few log lines is a far
+   *    better outcome than the whole restart crashing and leaving the
+   *    bridge dead. Falls back to `stdio: "ignore"` for the child.
    */
   restart(logFile: string): void {
     const backendDir = path.join(this.root, "backend");
-    const out = fs.openSync(logFile, "a");
+    let out: number | "ignore" = "ignore";
+    try {
+      out = fs.openSync(logFile, "a");
+    } catch {
+      // see the doc comment above - the old process's own shell may already hold this file open
+    }
     const child = spawn(process.execPath, [path.join(backendDir, "dist", "server.js"), ...process.argv.slice(2)], {
       cwd: backendDir,
       detached: true,
