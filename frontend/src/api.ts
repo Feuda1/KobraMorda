@@ -280,3 +280,28 @@ export const setSpoolmanUrl = (url: string) =>
 export const fetchSpools = () => greq<{ items: SpoolInfo[] }>("/api/spoolman/spools");
 export const linkSpool = (slot: number, spoolId: number | null) =>
   req(`/api/spoolman/links/${slot}`, { method: "POST", ...json({ spoolId }) });
+
+// ---- update -------------------------------------------------------------------
+
+export interface UpdateStatus {
+  isRepo: boolean;
+  branch: string;
+  currentCommit: string;
+  latestCommit: string;
+  behindBy: number;
+  log: string[];
+  dirty: string[];
+  checkedAt: number;
+  error: string;
+}
+
+export interface UpdateProgress {
+  running: boolean;
+  step: string;
+  error: string;
+  done: boolean;
+}
+
+export const fetchUpdateStatus = () => greq<UpdateStatus>("/api/update/status");
+export const fetchUpdateProgress = () => greq<UpdateProgress>("/api/update/progress");
+export const applyUpdate = () => greq<{ result: string }>("/api/update/apply", { method: "POST" });

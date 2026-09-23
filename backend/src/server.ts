@@ -8,10 +8,12 @@ import { PrinterRegistry } from "./printerRegistry.js";
 import { createPrintersApi } from "./printersApi.js";
 import { TelegramBot } from "./telegram.js";
 import { SpoolmanClient } from "./spoolman.js";
+import { Updater } from "./updater.js";
 import type { PrinterInstance } from "./printerInstance.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FRONTEND_DIST = path.join(__dirname, "..", "..", "frontend", "dist");
+const PROJECT_ROOT = path.join(__dirname, "..", "..");
+const FRONTEND_DIST = path.join(PROJECT_ROOT, "frontend", "dist");
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "..", "data");
 const PORT = Number(process.env.PORT ?? 7130);
 const FIRST_EXTRA_PORT = PORT + 1;
@@ -37,6 +39,7 @@ async function main() {
   }
 
   const telegram = new TelegramBot(registry, DATA_DIR);
+  const updater = new Updater(PROJECT_ROOT);
 
   const app = express();
   app.use((req, _res, next) => {
@@ -45,7 +48,7 @@ async function main() {
   });
   app.use(express.json());
 
-  app.use(createPrintersApi(registry, telegram, spoolman));
+  app.use(createPrintersApi(registry, telegram, spoolman, updater, path.join(DATA_DIR, "bridge.log")));
 
   // /p/<id>/... - the dashboard addresses a specific printer this way.
   app.use("/p/:pid", (req, res, next) => {

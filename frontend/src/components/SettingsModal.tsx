@@ -1,8 +1,11 @@
-import { Check, Copy, Pencil, Plus, RefreshCw, Send, Trash2, Unlink, WifiOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, CheckCircle2, Copy, Download, Loader2, Pencil, Plus, RefreshCw, Send, Trash2, Unlink, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import {
+  applyUpdate,
   fetchSpoolmanSettings,
   fetchTelegram,
+  fetchUpdateProgress,
+  fetchUpdateStatus,
   removePrinter,
   removeTelegramChat,
   renamePrinter,
@@ -12,6 +15,8 @@ import {
   updateTelegram,
   type PrinterSummary,
   type TelegramInfo,
+  type UpdateProgress,
+  type UpdateStatus,
 } from "../api";
 import { inputStyle, Modal, Switch } from "./Modal";
 
@@ -294,6 +299,180 @@ function TelegramSection() {
   );
 }
 
+const POLL_MS = 1200;
+
+function UpdateSection() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [progress, setProgress] = useState<UpdateProgress | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [error, setError] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = () =>
+    fetchUpdateStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null))
+      .finally(() => setLoaded(true));
+
+  useEffect(() => {
+    load();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const waitForRestart = () => {
+    setRestarting(true);
+    const t = setInterval(() => {
+      fetchUpdateStatus()
+        .then((s) => {
+          clearInterval(t);
+          setRestarting(false);
+          setProgress(null);
+          setStatus(s);
+        })
+        .catch(() => {
+          // still restarting - the port isn't answering yet
+        });
+    }, 1500);
+  };
+
+  const start = async () => {
+    setError("");
+    try {
+      await applyUpdate();
+    } catch (err) {
+      setError((err as Error).message);
+      return;
+    }
+    setProgress({ running: true, step: "Проверка", error: "", done: false });
+    pollRef.current = setInterval(() => {
+      fetchUpdateProgress()
+        .then((p) => {
+          setProgress(p);
+          if (p.error) {
+            clearInterval(pollRef.current!);
+          } else if (p.done) {
+            clearInterval(pollRef.current!);
+            waitForRestart();
+          }
+        })
+        .catch(() => {
+          // the update rebuilt fine and the process is already restarting
+          clearInterval(pollRef.current!);
+          waitForRestart();
+        });
+    }, POLL_MS);
+  };
+
+  if (!loaded) return null;
+  if (!status) {
+    return (
+      <div className="flex justify-center py-8" style={{ color: "var(--text-muted)" }}>
+        <WifiOff size={24} />
+      </div>
+    );
+  }
+  if (!status.isRepo) {
+    return (
+      <div className="py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+        Эта копия не связана с git-репозиторием, обновление недоступно.
+      </div>
+    );
+  }
+
+  if (restarting || progress?.done) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-8 text-sm" style={{ color: "var(--text-muted)" }}>
+        <Loader2 size={22} className="animate-spin" />
+        Перезапуск моста…
+      </div>
+    );
+  }
+
+  if (progress?.running) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-8 text-sm" style={{ color: "var(--text-muted)" }}>
+        <Loader2 size={22} className="animate-spin" />
+        {progress.step}
+      </div>
+    );
+  }
+
+  const upToDate = status.behindBy === 0 && !status.error;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2 text-sm">
+        {status.error ? (
+          <>
+            <span className="h-2 w-2 rounded-full" style={{ background: "var(--err)" }} />
+            <span style={{ color: "var(--err)" }}>{status.error}</span>
+          </>
+        ) : upToDate ? (
+          <>
+            <CheckCircle2 size={15} style={{ color: "var(--ok)" }} />
+            <span style={{ color: "var(--ok)" }}>Установлена последняя версия</span>
+          </>
+        ) : (
+          <>
+            <span className="h-2 w-2 rounded-full" style={{ background: "var(--accent)" }} />
+            <span style={{ color: "var(--accent)" }}>
+              Доступно обновление: {status.behindBy} {status.behindBy === 1 ? "коммит" : "коммита(ов)"}
+            </span>
+          </>
+        )}
+      </div>
+
+      <div className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
+        {status.branch} · {status.currentCommit.slice(0, 7)}
+      </div>
+
+      {status.dirty.length > 0 && (
+        <div className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(245,181,68,0.1)", color: "var(--warn)" }}>
+          В коде есть несохранённые правки ({status.dirty.length}) - обновление остановится, чтобы их не потерять.
+        </div>
+      )}
+
+      {status.log.length > 0 && (
+        <div className="scrollbar-thin flex max-h-40 flex-col gap-1 overflow-y-auto rounded-xl border p-2" style={{ borderColor: "var(--border)" }}>
+          {status.log.map((line, i) => (
+            <div key={i} className="truncate text-xs" style={{ color: "var(--text-muted)" }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <div className="text-xs" style={{ color: "var(--err)" }}>
+          {error}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={load}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+          style={{ background: "var(--border)", color: "var(--text-muted)" }}
+        >
+          <RefreshCw size={15} />
+        </button>
+        {!upToDate && !status.error && (
+          <button
+            onClick={start}
+            className="flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium"
+            style={{ background: "var(--accent)", color: "#fff" }}
+          >
+            <Download size={15} /> Обновить
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsModal({
   printers,
   onClose,
@@ -305,11 +484,12 @@ export function SettingsModal({
   onChanged: () => void;
   onAdd: () => void;
 }) {
-  const [tab, setTab] = useState<"printers" | "telegram" | "spoolman">("printers");
-  const tabs: Array<["printers" | "telegram" | "spoolman", string]> = [
+  const [tab, setTab] = useState<"printers" | "telegram" | "spoolman" | "update">("printers");
+  const tabs: Array<["printers" | "telegram" | "spoolman" | "update", string]> = [
     ["printers", "Принтеры"],
     ["telegram", "Telegram"],
     ["spoolman", "Spoolman"],
+    ["update", "Обновления"],
   ];
 
   return (
@@ -342,8 +522,10 @@ export function SettingsModal({
         </div>
       ) : tab === "telegram" ? (
         <TelegramSection />
-      ) : (
+      ) : tab === "spoolman" ? (
         <SpoolmanSection />
+      ) : (
+        <UpdateSection />
       )}
     </Modal>
   );

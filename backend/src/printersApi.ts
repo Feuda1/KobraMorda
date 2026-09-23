@@ -5,6 +5,7 @@ import { scanNetwork } from "./discovery.js";
 import { detectLanIp } from "./net.js";
 import type { TelegramBot } from "./telegram.js";
 import type { SpoolmanClient } from "./spoolman.js";
+import type { Updater } from "./updater.js";
 
 const MAIN_PORT = Number(process.env.PORT ?? 7130);
 
@@ -30,9 +31,23 @@ function summary(inst: PrinterInstance, isPrimary: boolean) {
   };
 }
 
+interface UpdateProgress {
+  running: boolean;
+  step: string;
+  error: string;
+  done: boolean;
+}
+
 /** Printer management (list / add / rename / remove / network scan) - independent of any single printer. */
-export function createPrintersApi(registry: PrinterRegistry, telegram: TelegramBot, spoolman: SpoolmanClient): Router {
+export function createPrintersApi(
+  registry: PrinterRegistry,
+  telegram: TelegramBot,
+  spoolman: SpoolmanClient,
+  updater: Updater,
+  bridgeLogFile: string,
+): Router {
   const router = Router();
+  let progress: UpdateProgress = { running: false, step: "", error: "", done: false };
 
   router.get("/api/printers", (_req, res) => {
     const primary = registry.primary();
@@ -119,6 +134,37 @@ export function createPrintersApi(registry: PrinterRegistry, telegram: TelegramB
     } catch (err) {
       res.status(502).json({ error: (err as Error).message });
     }
+  });
+
+  router.get("/api/update/status", async (_req, res) => {
+    res.json(await updater.status());
+  });
+
+  router.get("/api/update/progress", (_req, res) => {
+    res.json(progress);
+  });
+
+  // Fire-and-forget: responds immediately, progress is polled separately,
+  // and the process restarts itself once the rebuild succeeds (see Updater.restart).
+  router.post("/api/update/apply", (_req, res) => {
+    if (progress.running) {
+      res.status(409).json({ error: "Обновление уже выполняется" });
+      return;
+    }
+    progress = { running: true, step: "Проверка", error: "", done: false };
+    res.json({ result: "started" });
+    void (async () => {
+      try {
+        await updater.apply((step) => {
+          progress.step = step;
+        });
+        progress = { running: false, step: "Готово", error: "", done: true };
+        // give the frontend's next poll a moment to see "done" before the process exits
+        setTimeout(() => updater.restart(bridgeLogFile), 800);
+      } catch (err) {
+        progress = { running: false, step: "", error: (err as Error).message, done: false };
+      }
+    })();
   });
 
   return router;
