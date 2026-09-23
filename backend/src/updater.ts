@@ -163,7 +163,28 @@ export class Updater {
     ].join("\r\n");
     fs.writeFileSync(psPath, psScript);
 
-    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath], { windowsHide: true });
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath], {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    // Diagnostic trail for this exact respawn step - this is the one part of
+    // the whole update that has proven hardest to get to work reliably when
+    // triggered for real (as opposed to a standalone manual test), so its
+    // outcome is captured to a file that survives this process exiting,
+    // rather than trusted silently.
+    try {
+      fs.writeFileSync(
+        path.join(backendDir, "data", "restart-attempt.json"),
+        JSON.stringify(
+          { at: new Date().toISOString(), status: r.status, signal: r.signal, error: r.error && String(r.error), stdout: r.stdout, stderr: r.stderr },
+          null,
+          2,
+        ),
+      );
+    } catch {
+      // best-effort diagnostics only
+    }
 
     setTimeout(() => process.exit(0), 300);
   }
