@@ -119,25 +119,32 @@ export class Updater {
    * a live print (the printer keeps printing; only our own MQTT/monitoring
    * session drops for a few seconds and reconnects).
    *
-   * The new process's output is redirected via a shell (`cmd /c "... >>
-   * log"`) rather than by opening the log file directly in this process and
-   * handing off the descriptor - verified live that `fs.openSync(logFile,
-   * "a")` here throws EBUSY, because *this* still-running process's own
-   * wrapping shell already holds the file open with a sharing mode Node's
-   * own open doesn't match. A fresh shell opening it independently for
-   * append works fine even while the old one is still writing to it.
+   * Two things verified live and worth keeping in mind if this ever needs
+   * touching again:
+   *
+   * 1. The child MUST be `node.exe` spawned directly, not wrapped in a
+   *    `cmd /c "..."` shell. A `detached: true` child survives its parent
+   *    exiting only up to the *first* process in the chain that Windows
+   *    actually treats as detached - going through an intermediate cmd.exe
+   *    (e.g. for `>>` shell redirection) reliably got killed the moment
+   *    this process exited, even with `detached`/`unref()`/`stdio: "ignore"`
+   *    all set correctly on the cmd.exe spawn itself.
+   * 2. The log file must be reopened via `fs.openSync` and handed to the
+   *    child's stdio directly (not shell redirection either): cmd.exe's own
+   *    `>>` opens the file with a sharing mode that a second, independent
+   *    open of the same path collides with (EBUSY) - which is exactly what
+   *    used to happen here, since the *old* process (this one) was itself
+   *    started via a `cmd /c "... >> log"` wrapper. Two Node-opened append
+   *    handles on the same file, from two different processes, don't
+   *    conflict the same way.
    */
   restart(logFile: string): void {
     const backendDir = path.join(this.root, "backend");
-    const rel = path.relative(backendDir, logFile) || "data/bridge.log";
-    const extraArgs = process.argv
-      .slice(2)
-      .map((a) => `"${a.replace(/"/g, '""')}"`)
-      .join(" ");
-    const child = spawn("cmd.exe", ["/c", `node dist\\server.js ${extraArgs} >> "${rel}" 2>&1`], {
+    const out = fs.openSync(logFile, "a");
+    const child = spawn(process.execPath, [path.join(backendDir, "dist", "server.js"), ...process.argv.slice(2)], {
       cwd: backendDir,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", out, out],
       windowsHide: true,
     });
     child.unref();
