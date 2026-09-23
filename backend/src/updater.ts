@@ -135,12 +135,16 @@ export class Updater {
    * parent is `WmiPrvSE.exe` - a genuine OS service, never confined by
    * whatever spawned the process that asked for it.
    *
-   * Goes through a temp `.cmd` file rather than an inline `cmd /c "..."`
-   * command line for the same reason `apply()`'s npm calls avoid manual
-   * argument concatenation: multi-layer quoting (Node string -> PowerShell
-   * string -> WMI CommandLine -> cmd.exe) is exactly the kind of thing
-   * that's easy to get subtly wrong, so it's avoided rather than gotten
-   * right through trial and error.
+   * Goes through two temp files - a `.cmd` for the actual restart command
+   * and a `.ps1` that just invokes WMI on it - rather than any inline
+   * `-Command "..."` string. Confirmed live: typing the exact same
+   * Invoke-CimMethod line straight into a PowerShell prompt worked every
+   * time, but passing the equivalent string through Node's
+   * `spawnSync(..., ["-Command", theString])` silently mangled the
+   * backslashes in the path before PowerShell ever saw them and the
+   * restart just never happened - no error anywhere, since the broken
+   * command still "ran", it just didn't do what its text said. `-File` on
+   * a real script has no such argv-reconstruction step to go wrong.
    */
   restart(logFile: string): void {
     const backendDir = path.join(this.root, "backend");
@@ -152,13 +156,14 @@ export class Updater {
     const scriptPath = path.join(backendDir, "data", "_restart.cmd");
     fs.writeFileSync(scriptPath, `@echo off\r\ncd /d "${backendDir}"\r\nnode dist\\server.js ${extraArgs} >> "${rel}" 2>&1\r\n`);
 
-    const psCommand = [
-      "Invoke-CimMethod",
-      "-ClassName Win32_Process",
-      "-MethodName Create",
-      `-Arguments @{ CommandLine = '"${scriptPath}"'; CurrentDirectory = '${backendDir}' }`,
-    ].join(" ");
-    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { windowsHide: true });
+    const psPath = path.join(backendDir, "data", "_restart.ps1");
+    const psScript = [
+      "$ErrorActionPreference = 'Stop'",
+      `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"${scriptPath}"'; CurrentDirectory = '${backendDir}' } | Out-Null`,
+    ].join("\r\n");
+    fs.writeFileSync(psPath, psScript);
+
+    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath], { windowsHide: true });
 
     setTimeout(() => process.exit(0), 300);
   }
