@@ -42,6 +42,11 @@ export class Updater {
     return run("git", args, { cwd: this.root, windowsHide: true });
   }
 
+  /** `npm` resolves to npm.cmd on Windows - execFile only finds it with a shell, unlike plain .exe tools like git. */
+  private npm(args: string[], cwd: string) {
+    return run("npm", args, { cwd, windowsHide: true, timeout: 10 * 60_000, shell: true });
+  }
+
   async status(): Promise<UpdateStatus> {
     const base: UpdateStatus = {
       isRepo: false,
@@ -93,9 +98,9 @@ export class Updater {
 
       for (const pkg of ["backend", "frontend"]) {
         onProgress(`Установка зависимостей (${pkg})`);
-        await run("npm", ["install"], { cwd: path.join(this.root, pkg), windowsHide: true, timeout: 10 * 60_000 });
+        await this.npm(["install"], path.join(this.root, pkg));
         onProgress(`Сборка (${pkg})`);
-        await run("npm", ["run", "build"], { cwd: path.join(this.root, pkg), windowsHide: true, timeout: 10 * 60_000 });
+        await this.npm(["run", "build"], path.join(this.root, pkg));
       }
     } catch (err) {
       throw new Error(err instanceof Error && err.message.startsWith("Об") ? err.message : describeGitError(err));
