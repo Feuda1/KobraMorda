@@ -145,16 +145,40 @@ export class Updater {
    * restart just never happened - no error anywhere, since the broken
    * command still "ran", it just didn't do what its text said. `-File` on
    * a real script has no such argv-reconstruction step to go wrong.
+   *
+   * The new process logs to a freshly timestamped file, not `logFile`
+   * itself. Root-caused live: this old process's *own* wrapping shell still
+   * holds `logFile` open via its own `>>` redirection for up to the ~300ms
+   * before this process actually exits, and cmd.exe's own `>>` open uses a
+   * sharing mode that a second, independent `>>` open of the same path (by
+   * the new process's wrapping shell) collides with - a sharing violation
+   * on cmd.exe's *own* redirection, one layer up from the EBUSY that hit
+   * Node's direct `fs.openSync` earlier. Verified with a byte-for-byte
+   * identical restart script that only fails when an old process still has
+   * the same log file open; a fresh path every time sidesteps it for good
+   * instead of racing a fixed delay against however long the old process
+   * takes to actually let go.
    */
   restart(logFile: string): void {
     const backendDir = path.join(this.root, "backend");
-    const rel = path.relative(backendDir, logFile) || "data\\bridge.log";
+    const dir = path.dirname(logFile);
+    const ext = path.extname(logFile);
+    const freshLog = path.join(dir, `${path.basename(logFile, ext)}-${Date.now()}${ext}`);
+    const rel = path.relative(backendDir, freshLog);
     const extraArgs = process.argv
       .slice(2)
       .map((a) => `"${a.replace(/"/g, '""')}"`)
       .join(" ");
+    // `ping` as a sleep: this old process is still bound to the port for up
+    // to ~300ms after this (see process.exit below) - `timeout` is the
+    // usual batch-file sleep, but it refuses to run without a real console
+    // ("INPUT redirection is not supported"), which this script never has
+    // since it's launched through WMI. `ping -n` has no such requirement.
     const scriptPath = path.join(backendDir, "data", "_restart.cmd");
-    fs.writeFileSync(scriptPath, `@echo off\r\ncd /d "${backendDir}"\r\nnode dist\\server.js ${extraArgs} >> "${rel}" 2>&1\r\n`);
+    fs.writeFileSync(
+      scriptPath,
+      `@echo off\r\nping -n 3 127.0.0.1 >nul\r\ncd /d "${backendDir}"\r\nnode dist\\server.js ${extraArgs} >> "${rel}" 2>&1\r\n`,
+    );
 
     const psPath = path.join(backendDir, "data", "_restart.ps1");
     const psScript = [
@@ -163,28 +187,10 @@ export class Updater {
     ].join("\r\n");
     fs.writeFileSync(psPath, psScript);
 
-    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath], {
+    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath], {
       windowsHide: true,
-      encoding: "utf8",
       timeout: 15_000,
     });
-    // Diagnostic trail for this exact respawn step - this is the one part of
-    // the whole update that has proven hardest to get to work reliably when
-    // triggered for real (as opposed to a standalone manual test), so its
-    // outcome is captured to a file that survives this process exiting,
-    // rather than trusted silently.
-    try {
-      fs.writeFileSync(
-        path.join(backendDir, "data", "restart-attempt.json"),
-        JSON.stringify(
-          { at: new Date().toISOString(), status: r.status, signal: r.signal, error: r.error && String(r.error), stdout: r.stdout, stderr: r.stderr },
-          null,
-          2,
-        ),
-      );
-    } catch {
-      // best-effort diagnostics only
-    }
 
     setTimeout(() => process.exit(0), 300);
   }
