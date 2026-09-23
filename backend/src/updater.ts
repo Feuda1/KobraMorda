@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -119,41 +119,47 @@ export class Updater {
    * a live print (the printer keeps printing; only our own MQTT/monitoring
    * session drops for a few seconds and reconnects).
    *
-   * Two things verified live and worth keeping in mind if this ever needs
-   * touching again:
+   * Goes through WMI process creation (`Invoke-CimMethod ... Win32_Process
+   * ... Create`), not `child_process.spawn({ detached: true })` - verified
+   * live, repeatedly, that a Node "detached" child does not reliably
+   * survive this process exiting: it works when *this* process is itself
+   * a direct child of something independent, but every real launch here
+   * (KobraMorda.exe, the .cmd/.vbs, starting it manually) goes through an
+   * intermediate shell (`cmd /c "... >> log"`), and a detached child of a
+   * process that is itself several shells deep did not survive being
+   * respawned this way - it (and the log-file handle drama that came with
+   * trying to hand it a `fs.openSync` descriptor directly) is exactly the
+   * kind of thing that's easy to "fix" against a shallow manual test and
+   * still be wrong for the real, nested case. WMI process creation doesn't
+   * have this problem: whatever creates it, the resulting process's real
+   * parent is `WmiPrvSE.exe` - a genuine OS service, never confined by
+   * whatever spawned the process that asked for it.
    *
-   * 1. The child MUST be `node.exe` spawned directly, not wrapped in a
-   *    `cmd /c "..."` shell. A `detached: true` child survives its parent
-   *    exiting only up to the *first* process in the chain that Windows
-   *    actually treats as detached - going through an intermediate cmd.exe
-   *    (e.g. for `>>` shell redirection) reliably got killed the moment
-   *    this process exited, even with `detached`/`unref()`/`stdio: "ignore"`
-   *    all set correctly on the cmd.exe spawn itself.
-   * 2. Opening the log file for the child (`fs.openSync(logFile, "a")`) can
-   *    throw EBUSY - if *this* process was itself started via a shell
-   *    (`cmd /c "... >> log"`, which every launch method here uses:
-   *    KobraMorda.exe, the .cmd/.vbs, and how I start it manually), that
-   *    shell already holds the file open with a sharing mode a second,
-   *    independent open of the same path collides with. That failure must
-   *    not be fatal - losing the new process's first few log lines is a far
-   *    better outcome than the whole restart crashing and leaving the
-   *    bridge dead. Falls back to `stdio: "ignore"` for the child.
+   * Goes through a temp `.cmd` file rather than an inline `cmd /c "..."`
+   * command line for the same reason `apply()`'s npm calls avoid manual
+   * argument concatenation: multi-layer quoting (Node string -> PowerShell
+   * string -> WMI CommandLine -> cmd.exe) is exactly the kind of thing
+   * that's easy to get subtly wrong, so it's avoided rather than gotten
+   * right through trial and error.
    */
   restart(logFile: string): void {
     const backendDir = path.join(this.root, "backend");
-    let out: number | "ignore" = "ignore";
-    try {
-      out = fs.openSync(logFile, "a");
-    } catch {
-      // see the doc comment above - the old process's own shell may already hold this file open
-    }
-    const child = spawn(process.execPath, [path.join(backendDir, "dist", "server.js"), ...process.argv.slice(2)], {
-      cwd: backendDir,
-      detached: true,
-      stdio: ["ignore", out, out],
-      windowsHide: true,
-    });
-    child.unref();
+    const rel = path.relative(backendDir, logFile) || "data\\bridge.log";
+    const extraArgs = process.argv
+      .slice(2)
+      .map((a) => `"${a.replace(/"/g, '""')}"`)
+      .join(" ");
+    const scriptPath = path.join(backendDir, "data", "_restart.cmd");
+    fs.writeFileSync(scriptPath, `@echo off\r\ncd /d "${backendDir}"\r\nnode dist\\server.js ${extraArgs} >> "${rel}" 2>&1\r\n`);
+
+    const psCommand = [
+      "Invoke-CimMethod",
+      "-ClassName Win32_Process",
+      "-MethodName Create",
+      `-Arguments @{ CommandLine = '"${scriptPath}"'; CurrentDirectory = '${backendDir}' }`,
+    ].join(" ");
+    spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { windowsHide: true });
+
     setTimeout(() => process.exit(0), 300);
   }
 }
